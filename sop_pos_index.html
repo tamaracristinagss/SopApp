@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SOP Quick POS</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React and ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- Babel for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-neutral-50">
+  <div id="root"></div>
+
+  <script type="text/babel">
+
+    const { useState, useEffect, useMemo } = React;
+
+    const PAYMENT_METHODS = ["Cash", "Card", "EFTPOS", "Online", "Other"];
+    const CATEGORIES = ["Clothing","Shoes","Accessories","Household","Electronics","Furniture","Books","Toys","Other"];
+
+    const QUICK_BY_CATEGORY = { Clothing: [2,5], Household: [1,2,3] };
+    const QUICK_AMOUNTS = [2,5,8,10,15,20,25,30,40,50];
+
+    const SHEETS_WEBAPP_URL = ""; // put your Google Apps Script URL here
+    const LS_KEY = "sop_pos_sales_v1";
+
+    function formatAUD(n) {
+      if (Number.isNaN(n)) return "$0.00";
+      return new Intl.NumberFormat("en-AU",{style:"currency",currency:"AUD"}).format(n);
+    }
+    function loadSales(){ try{const raw=localStorage.getItem(LS_KEY); return raw?JSON.parse(raw):[];}catch{return [];} }
+    function saveSales(sales){ localStorage.setItem(LS_KEY, JSON.stringify(sales)); }
+
+    function App(){
+      const [amount,setAmount]=useState("");
+      const [qty,setQty]=useState(1);
+      const [discount,setDiscount]=useState("0");
+      const [payment,setPayment]=useState("Cash");
+      const [category,setCategory]=useState("Clothing");
+      const [manager,setManager]=useState("");
+      const [volunteer,setVolunteer]=useState("");
+      const [notes,setNotes]=useState("");
+      const [sales,setSales]=useState([]);
+      const [search,setSearch]=useState("");
+      const [dateFilter,setDateFilter]=useState(new Date().toISOString().slice(0,10));
+      const [lastDeleted,setLastDeleted]=useState(null);
+
+      useEffect(()=>{setSales(loadSales());},[]);
+      useEffect(()=>{saveSales(sales);},[sales]);
+
+      const todaySales = useMemo(()=>sales.filter(s=>!s.deleted && s.createdAt.slice(0,10)===dateFilter),[sales,dateFilter]);
+      const filteredSales = useMemo(()=>{
+        const q=search.trim().toLowerCase();
+        if(!q) return todaySales;
+        return todaySales.filter(s=>s.manager.toLowerCase().includes(q)||s.volunteer.toLowerCase().includes(q)||s.payment.toLowerCase().includes(q)||s.category.toLowerCase().includes(q)||(s.notes||"").toLowerCase().includes(q));
+      },[todaySales,search]);
+
+      const summary = useMemo(()=>{
+        const totalsByMethod={},totalsByManager={};let grand=0;
+        for(const s of todaySales){
+          const net=Math.max(0,s.amount*s.qty-s.discount);grand+=net;
+          totalsByMethod[s.payment]??={count:0,total:0};totalsByMethod[s.payment].count++;totalsByMethod[s.payment].total+=net;
+          const mgr=(s.manager||"").trim()||"(no manager)";totalsByManager[mgr]??={count:0,total:0};totalsByManager[mgr].count++;totalsByManager[mgr].total+=net;
+        }
+        return {grand, totalsByMethod, totalsByManager,count:todaySales.length};
+      },[todaySales]);
+
+      const currentNet = useMemo(()=>{
+        const amt=parseFloat(amount||"0")||0; const d=parseFloat(discount||"0")||0; const net=Math.max(0,amt*qty-d);
+        return {gross:amt*qty, net, discount:d};
+      },[amount,qty,discount]);
+
+      function addQuick(n){setAmount(String(Number(n).toFixed(2)));}
+      function completeSale(){
+        const amt=parseFloat(amount||"0");const d=parseFloat(discount||"0");
+        if(!amt||amt<=0){alert("Enter amount");return;}
+        const sale={id:crypto.randomUUID(),amount:Number(amt.toFixed(2)),qty,discount:Number((d||0).toFixed(2)),payment,category,manager:manager.trim(),volunteer:volunteer.trim(),notes:notes.trim(),createdAt:new Date().toISOString(),deleted:false};
+        setSales(s=>[sale,...s]);
+        setAmount("");setQty(1);setDiscount("0");setPayment("Cash");setCategory("Clothing");setNotes("");setManager("");setVolunteer("");
+      }
+      function softDeleteSale(id){ setSales(s=>s.map(x=>x.id===id?{...x,deleted:true}:x)); const del=sales.find(x=>x.id===id); if(del)setLastDeleted(del);}
+      function undoLast(){ if(sales.length===0)return; const last=sales[0]; setSales(s=>s.slice(1)); setLastDeleted(last); }
+      function restoreLastDeleted(){ if(!lastDeleted)return; setSales(s=>[{...lastDeleted,deleted:false,id:crypto.randomUUID(),createdAt:new Date().toISOString()},...s]); setLastDeleted(null);}
+
+      return (<div className="p-4">
+        <h1 className="text-2xl font-bold mb-2">SOP Quick POS</h1>
+        <div className="mb-2">Today {dateFilter} — {formatAUD(summary.grand)} ({summary.count} sales)</div>
+        <div className="mb-2">
+          <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="Amount" className="border px-2 py-1 mr-2"/>
+          <input type="number" value={qty} onChange={e=>setQty(Number(e.target.value))} className="border px-2 py-1 w-16 mr-2"/>
+          <input type="number" value={discount} onChange={e=>setDiscount(e.target.value)} placeholder="Discount" className="border px-2 py-1 w-24"/>
+          <button onClick={completeSale} className="bg-emerald-600 text-white px-3 py-1 ml-2">Complete</button>
+          <button onClick={undoLast} className="bg-orange-500 text-white px-3 py-1 ml-2">Undo Last</button>
+          {lastDeleted && <button onClick={restoreLastDeleted} className="bg-yellow-500 text-white px-3 py-1 ml-2">Restore</button>}
+        </div>
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          {(QUICK_BY_CATEGORY[category]||QUICK_AMOUNTS).map(v=>(<button key={v} onClick={()=>addQuick(v)} className="bg-neutral-800 text-white py-1">${v}</button>))}
+        </div>
+        <div className="mb-2">
+          {PAYMENT_METHODS.map(m=>(<button key={m} onClick={()=>setPayment(m)} className={(payment===m?"bg-emerald-600 text-white":"bg-neutral-200")+" px-2 py-1 mr-1"}>{m}</button>))}
+        </div>
+        <div className="mb-2">
+          {CATEGORIES.map(c=>(<button key={c} onClick={()=>setCategory(c)} className={(category===c?"bg-neutral-900 text-white":"bg-neutral-200")+" px-2 py-1 mr-1"}>{c}</button>))}
+        </div>
+        <input placeholder="Manager" value={manager} onChange={e=>setManager(e.target.value)} className="border px-2 py-1 mr-2"/>
+        <input placeholder="Volunteer" value={volunteer} onChange={e=>setVolunteer(e.target.value)} className="border px-2 py-1 mr-2"/>
+        <input placeholder="Notes" value={notes} onChange={e=>setNotes(e.target.value)} className="border px-2 py-1 mr-2"/>
+        <div className="mt-4 max-h-64 overflow-auto divide-y">
+          {filteredSales.map(s=>(
+            <div key={s.id} className="py-1 flex justify-between">
+              <span>{formatAUD(Math.max(0,s.amount*s.qty-s.discount))} • {s.payment} • {s.category} • {s.manager}</span>
+              <button onClick={()=>softDeleteSale(s.id)} className="bg-red-500 text-white px-2 py-0.5 text-xs">Delete</button>
+            </div>
+          ))}
+        </div>
+      </div>);
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+  </script>
+</body>
+</html>
